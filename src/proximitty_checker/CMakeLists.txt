@@ -5,30 +5,52 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(moveit_core REQUIRED)
+find_package(moveit_msgs REQUIRED)
+find_package(moveit_ros_planning REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-add_executable(joint_state_pub src/joint_state_pub.cpp)
-ament_target_dependencies(joint_state_pub rclcpp sensor_msgs)
+set(JOINT_STATE_PUB_TARGET ${PROJECT_NAME}_joint_state_pub)
+set(DISTANCE_ESTIMATOR_TARGET ${PROJECT_NAME}_distance_estimator)
+
+add_executable(${JOINT_STATE_PUB_TARGET} src/joint_state_pub.cpp)
+set_target_properties(${JOINT_STATE_PUB_TARGET} PROPERTIES OUTPUT_NAME joint_state_pub)
+ament_target_dependencies(${JOINT_STATE_PUB_TARGET} rclcpp sensor_msgs)
+
+add_executable(${DISTANCE_ESTIMATOR_TARGET} src/distance_estimator.cpp)
+set_target_properties(${DISTANCE_ESTIMATOR_TARGET} PROPERTIES OUTPUT_NAME distance_estimator)
+ament_target_dependencies(${DISTANCE_ESTIMATOR_TARGET}
+  rclcpp
+  sensor_msgs
+  std_msgs
+  geometry_msgs
+  moveit_core
+  moveit_msgs
+  moveit_ros_planning
+  moveit_ros_planning_interface
+)
 
 install(TARGETS
-  joint_state_pub
+  ${JOINT_STATE_PUB_TARGET}
+  ${DISTANCE_ESTIMATOR_TARGET}
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  launch config
+  DESTINATION share/${PROJECT_NAME}
 )
 
 ament_package()
