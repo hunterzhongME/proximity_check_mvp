@@ -41,18 +41,6 @@ ament_target_dependencies(distance_estimator
   moveit_ros_planning_interface
 )
 
-add_executable(distance_estimator src/distance_estimator.cpp)
-ament_target_dependencies(distance_estimator
-  rclcpp
-  sensor_msgs
-  std_msgs
-  geometry_msgs
-  moveit_core
-  moveit_msgs
-  moveit_ros_planning
-  moveit_ros_planning_interface
-)
-
 install(TARGETS
   joint_state_pub
   distance_estimator

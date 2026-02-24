@@ -4,14 +4,17 @@ from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     robot_urdf_path = LaunchConfiguration("robot_urdf_path")
+    robot_srdf_path = LaunchConfiguration("robot_srdf_path")
     joint_state_topic = LaunchConfiguration("joint_state_topic")
     use_rviz = LaunchConfiguration("use_rviz")
 
-    robot_description = Command(["xacro ", robot_urdf_path])
+    robot_description = ParameterValue(Command(["xacro ", robot_urdf_path]), value_type=str)
+    robot_description_semantic = ParameterValue(Command(["xacro ", robot_srdf_path]), value_type=str)
 
     proximity_params = PathJoinSubstitution([
         FindPackageShare("proximitty_checker"),
@@ -38,7 +41,11 @@ def generate_launch_description():
             {
                 "joint_state_topic": joint_state_topic,
                 "robot_urdf_path": robot_urdf_path,
+                "robot_srdf_path": robot_srdf_path,
                 "robot_description_xml": robot_description,
+                "robot_description_semantic_xml": robot_description_semantic,
+                "robot_description": "robot_description",
+                "robot_description_semantic": "robot_description_semantic",
             },
         ],
     )
@@ -53,6 +60,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("robot_urdf_path", description="Absolute path to local URDF/Xacro file."),
+        DeclareLaunchArgument("robot_srdf_path", description="Absolute path to local SRDF/Xacro file."),
         DeclareLaunchArgument("joint_state_topic", default_value="/joint_states"),
         DeclareLaunchArgument("use_rviz", default_value="false"),
         rsp_node,

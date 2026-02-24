@@ -8,9 +8,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <limits>
-#include <memory>
-#include <string>
+#include <functional>
 
 #include <builtin_interfaces/msg/time.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -30,12 +28,19 @@ public:
   DistanceEstimator()
   : Node("distance_estimator")
   {
-    joint_state_topic_ = this->declare_parameter<std::string>("joint_state_topic", "/joint_states");
+    // Driverless teaching-time mode:
+    // load robot description locally (URDF path or direct XML)
+    joint_state_topic_ = this->declare_parameter<std::string>(
+      "joint_state_topic", "/joint_state_broadcaster/joint_states");
     robot_urdf_path_ = this->declare_parameter<std::string>("robot_urdf_path", "");
     robot_description_xml_ = this->declare_parameter<std::string>("robot_description_xml", "");
-    joint_state_topic_ = this->declare_parameter<std::string>("joint_state_topic", "/joint_state_broadcaster/joint_states");
     robot_description_ = this->declare_parameter<std::string>("robot_description", "robot_description");
 
+	robot_srdf_path_ = this->declare_parameter<std::string>("robot_srdf_path", "");
+    robot_description_semantic_xml_ =
+    this->declare_parameter<std::string>("robot_description_semantic_xml", "");
+    robot_description_semantic_ =
+    this->declare_parameter<std::string>("robot_description_semantic", "robot_description_semantic");
     warn_threshold_m_ = this->declare_parameter<double>("warn_threshold_m", 0.12);
     stop_threshold_m_ = this->declare_parameter<double>("stop_threshold_m", 0.06);
 
@@ -58,12 +63,14 @@ public:
       joint_state_topic_, rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::JointState::SharedPtr msg) {
         last_joint_state_stamp_ = msg->header.stamp;
+
         if (!joint_mismatch_checked_ && planning_scene_monitor_) {
           checkJointNameMismatch(*msg);
           joint_mismatch_checked_ = true;
         }
       });
 
+    // Delay init slightly so node is fully up before constructing MoveIt objects
     init_timer_ = this->create_wall_timer(
       std::chrono::milliseconds(10),
       std::bind(&DistanceEstimator::initializePlanningScene, this));
@@ -78,7 +85,9 @@ private:
     }
 
     if (robot_urdf_path_.empty()) {
-      RCLCPP_FATAL(get_logger(), "Missing required parameter 'robot_urdf_path'. Set a local URDF file path.");
+      RCLCPP_FATAL(
+        get_logger(),
+        "Missing required parameter 'robot_urdf_path'. Set a local URDF file path.");
       return false;
     }
 
@@ -99,37 +108,69 @@ private:
     return true;
   }
 
+	bool loadSemanticDescription(std::string & xml_out)
+	{
+		if (!robot_description_semantic_xml_.empty()) {
+		  xml_out = robot_description_semantic_xml_;
+		  return true;
+		}
+
+		if (robot_srdf_path_.empty()) {
+		  RCLCPP_FATAL(get_logger(), "Missing required parameter 'robot_srdf_path'.");
+		  return false;
+		}
+
+		std::ifstream srdf_stream(robot_srdf_path_);
+		if (!srdf_stream.good()) {
+		  RCLCPP_FATAL(get_logger(), "Invalid robot_srdf_path: '%s'", robot_srdf_path_.c_str());
+		  return false;
+		}
+
+		std::stringstream buffer;
+		buffer << srdf_stream.rdbuf();
+		xml_out = buffer.str();
+
+		if (xml_out.empty()) {
+		  RCLCPP_FATAL(get_logger(), "SRDF file is empty: '%s'", robot_srdf_path_.c_str());
+		  return false;
+		}
+
+		return true;
+	}
   void initializePlanningScene()
   {
-    if (planning_scene_monitor_) {
-      return;
-    }
+		std::string urdf_xml;
+		if (!loadRobotDescription(urdf_xml)) {
+			rclcpp::shutdown();
+			return;
+		}
 
-    std::string xml;
-    if (!loadRobotDescription(xml)) {
-      rclcpp::shutdown();
-      return;
-    }
+		std::string srdf_xml;
+		if (!loadSemanticDescription(srdf_xml)) {
+			rclcpp::shutdown();
+			return;
+		}
 
-    this->set_parameter(rclcpp::Parameter("robot_description", xml));
+		// Publish both descriptions for MoveIt
+		this->set_parameter(rclcpp::Parameter(robot_description_, urdf_xml));
+		this->set_parameter(rclcpp::Parameter(robot_description_semantic_, srdf_xml));
 
-    planning_scene_monitor_ = std::make_shared<planning_scene_monitor::PlanningSceneMonitor>(shared_from_this(), "robot_description");
-    if (!planning_scene_monitor_->getPlanningScene()) {
+		planning_scene_monitor_ =
+			std::make_shared<planning_scene_monitor::PlanningSceneMonitor>(shared_from_this(), robot_description_);
+
+    if (!planning_scene_monitor_ || !planning_scene_monitor_->getPlanningScene()) {
       RCLCPP_FATAL(get_logger(), "Failed to initialize PlanningSceneMonitor from local robot description.");
-    planning_scene_monitor_ = std::make_shared<planning_scene_monitor::PlanningSceneMonitor>(shared_from_this(), robot_description_);
-    if (!planning_scene_monitor_->getPlanningScene()) {
-      RCLCPP_FATAL(get_logger(), "Failed to initialize PlanningSceneMonitor. Check robot_description parameter.");
       rclcpp::shutdown();
       return;
     }
 
     cacheExpectedJointNames();
+
     planning_scene_monitor_->startStateMonitor(joint_state_topic_);
     planning_scene_monitor_->startPublishingPlanningScene(
       planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE,
       "~/monitored_planning_scene");
-    planning_scene_monitor_->startStateMonitor(joint_state_topic_);
-    planning_scene_monitor_->startPublishingPlanningScene(planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE, "~/monitored_planning_scene");
+
     addStaticObstacle();
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, eval_rate_hz_));
@@ -138,7 +179,7 @@ private:
       std::bind(&DistanceEstimator::onTimer, this));
 
     init_timer_.reset();
-    RCLCPP_INFO(get_logger(), "Distance estimator running. Joint topic: %s", joint_state_topic_.c_str());
+    RCLCPP_INFO(get_logger(), "Distance estimator running. Listening: %s", joint_state_topic_.c_str());
   }
 
   void cacheExpectedJointNames()
@@ -185,8 +226,9 @@ private:
         get_logger(),
         "Joint-name mismatch detected. missing=%zu unknown=%zu",
         missing.size(), unknown.size());
+    } else {
+      RCLCPP_INFO(get_logger(), "Joint-name check passed.");
     }
-    RCLCPP_INFO(get_logger(), "Distance estimator running. Listening: %s", joint_state_topic_.c_str());
   }
 
   void addStaticObstacle()
@@ -211,21 +253,28 @@ private:
 
     planning_scene_monitor::LockedPlanningSceneRW scene(planning_scene_monitor_);
     scene->processCollisionObjectMsg(object);
-    RCLCPP_INFO(get_logger(), "Added static obstacle '%s' in frame '%s'", obstacle_id_.c_str(), world_frame_.c_str());
+
+    RCLCPP_INFO(
+      get_logger(),
+      "Added static obstacle '%s' in frame '%s'",
+      obstacle_id_.c_str(), world_frame_.c_str());
   }
 
   void onTimer()
   {
-    auto warning = std::string("OK");
+    std::string warning = "OK";
     double min_distance = std::numeric_limits<double>::infinity();
 
     if (!hasFreshJointState()) {
       warning = "STALE";
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "No fresh joint states on %s", joint_state_topic_.c_str());
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "No fresh joint states on %s", joint_state_topic_.c_str());
     } else {
       planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
       collision_detection::DistanceRequest req;
       collision_detection::DistanceResult res;
+
       req.enable_signed_distance = true;
       req.type = collision_detection::DistanceRequestType::SINGLE;
 
@@ -248,7 +297,7 @@ private:
     warning_level_pub_->publish(level_msg);
   }
 
-  bool hasFreshJointState() const
+  bool hasFreshJointState()
   {
     if (last_joint_state_stamp_.sec == 0 && last_joint_state_stamp_.nanosec == 0) {
       return false;
@@ -259,33 +308,28 @@ private:
     return (now - then).seconds() <= stale_timeout_sec_;
   }
 
+  // Parameters / config
   std::string joint_state_topic_;
   std::string robot_urdf_path_;
   std::string robot_description_xml_;
+  std::string robot_description_;
+  std::string robot_srdf_path_;
+	std::string robot_description_semantic_xml_;
+	std::string robot_description_semantic_;
   std::string world_frame_;
   std::string obstacle_id_;
 
+  // Joint validation
   std::set<std::string> expected_joint_names_;
   bool joint_mismatch_checked_{false};
 
-	if (last_joint_state_stamp_.sec == 0 && last_joint_state_stamp_.nanosec == 0) {
-      return false;
-	}
-
-	const rclcpp::Time now = this->now();
-	const rclcpp::Time then(last_joint_state_stamp_);
-	return (now - then).seconds() <= stale_timeout_sec_;
-  }
-  std::string joint_state_topic_;
-  std::string robot_description_;
-  std::string world_frame_;
-  std::string obstacle_id_;
-
+  // Thresholds / timing
   double warn_threshold_m_{};
   double stop_threshold_m_{};
   double stale_timeout_sec_{};
   double eval_rate_hz_{};
 
+  // Obstacle box
   double obstacle_x_{};
   double obstacle_y_{};
   double obstacle_z_{};
@@ -293,14 +337,17 @@ private:
   double obstacle_py_{};
   double obstacle_pz_{};
 
-  builtin_interfaces::msg::Time last_joint_state_stamp_;
+  // Latest telemetry timestamp
+  builtin_interfaces::msg::Time last_joint_state_stamp_{};
 
+  // ROS I/O
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr min_distance_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr warning_level_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr init_timer_;
 
+  // MoveIt planning scene
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
 };
 
