@@ -10,11 +10,11 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+
 find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
-find_package(moveit_ros_planning_scene_monitor REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -24,7 +24,10 @@ if(BUILD_TESTING)
 endif()
 
 add_executable(joint_state_pub src/joint_state_pub.cpp)
-ament_target_dependencies(joint_state_pub rclcpp sensor_msgs)
+ament_target_dependencies(joint_state_pub
+  rclcpp
+  sensor_msgs
+)
 
 add_executable(distance_estimator src/distance_estimator.cpp)
 ament_target_dependencies(distance_estimator
@@ -36,7 +39,6 @@ ament_target_dependencies(distance_estimator
   moveit_msgs
   moveit_ros_planning
   moveit_ros_planning_interface
-  moveit_ros_planning_scene_monitor
 )
 
 install(TARGETS

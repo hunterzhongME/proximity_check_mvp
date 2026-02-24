@@ -142,15 +142,14 @@ private:
 
   bool hasFreshJointState() const
   {
-    if (last_joint_state_stamp_.sec == 0 && last_joint_state_stamp_.nanosec == 0) {
+	if (last_joint_state_stamp_.sec == 0 && last_joint_state_stamp_.nanosec == 0) {
       return false;
-    }
+	}
 
-    const rclcpp::Time now = this->get_clock()->now();
-    const rclcpp::Time then(last_joint_state_stamp_);
-    return (now - then).seconds() <= stale_timeout_sec_;
+	const rclcpp::Time now = this->now();
+	const rclcpp::Time then(last_joint_state_stamp_);
+	return (now - then).seconds() <= stale_timeout_sec_;
   }
-
   std::string joint_state_topic_;
   std::string robot_description_;
   std::string world_frame_;
