@@ -7,7 +7,17 @@ The end goal of this project is to provide an innovative solution when teaching 
 
 ## Build
 
-TBD
+```bash
+source /opt/ros/$ROS_DISTRO/setup.bash
+colcon build --packages-select proximitty_checker
+source install/setup.bash
+```
+
+If you build the full workspace and see the underlay override warning for `melfa_msgs`, use:
+
+```bash
+colcon build --allow-overriding melfa_msgs
+```
 
 ## Run
 
