@@ -1,0 +1,8 @@
+source;share/proximitty_checker/hook/cmake_prefix_path.ps1
+source;share/proximitty_checker/hook/cmake_prefix_path.dsv
+source;share/proximitty_checker/hook/cmake_prefix_path.sh
+source;share/proximitty_checker/local_setup.bash
+source;share/proximitty_checker/local_setup.dsv
+source;share/proximitty_checker/local_setup.ps1
+source;share/proximitty_checker/local_setup.sh
+source;share/proximitty_checker/local_setup.zsh

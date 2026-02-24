@@ -1,0 +1,7 @@
+digraph G {
+"base" -> "mon_default_tcp"[label=" Broadcaster: default_authority\nAverage rate: 246.98\nBuffer length: 5.017\nMost recent transform: 1771230543.686647\nOldest transform: 1771230538.670052\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 1771230543.6912808"[ shape=plaintext ] ;
+}->"base";
+}

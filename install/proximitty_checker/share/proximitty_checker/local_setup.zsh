@@ -1,0 +1,1 @@
+/home/melco/sho/proximity_check_mvp/build/proximitty_checker/ament_cmake_environment_hooks/local_setup.zsh
