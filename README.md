@@ -6,6 +6,7 @@ The end goal of this project is to provide an innovative solution when teaching 
 - joint states are provided by `melfa_ros2_monitor` on `/joint_states`
 - local robot model file (URDF or Xacro) is available during teaching mode
 - CAD/environment geometry for collision checking (MVP currently uses direct Planning Scene primitive)
+- it is assumed we have the CAD file for the work environment of robot.
 
 ## Build
 
@@ -65,3 +66,37 @@ Default parameters are in:
 - `src/proximitty_checker/config/proximity_params.yaml`
 
 You can override thresholds and obstacle pose/size quickly for experiments.
+### 1) Verify monitor joint-state stream
+```bash
+ros2 run proximitty_checker joint_state_pub \
+  --ros-args -p joint_state_topic:=/joint_state_broadcaster/joint_states
+```
+
+### 2) Run distance estimator (RV-7FRL MVP)
+```bash
+ros2 run proximitty_checker distance_estimator --ros-args \
+  -p joint_state_topic:=/joint_state_broadcaster/joint_states \
+  -p robot_description:=robot_description \
+  -p world_frame:=world \
+  -p warn_threshold_m:=0.12 \
+  -p stop_threshold_m:=0.06
+```
+
+### 3) Observe outputs
+- `~/minimum_distance` (`std_msgs/Float32`)
+- `~/warning_level` (`std_msgs/String`: `OK`, `WARN`, `STOP`, `STALE`)
+
+## MVP scope (current)
+- Robot model: `rv7frl`
+- Input source during teaching: `melfa_monitor` joint states via `/joint_state_broadcaster/joint_states`
+- Collision scope: robot vs environment only
+- Environment model for MVP: static geometry added directly to Planning Scene
+
+For this MVP, adding geometry directly to the Planning Scene is sufficient to validate warning-distance and alarming hypotheses quickly. As the project matures, the geometry injection can be replaced by CAD/mesh loading and fixture presets.
+
+## Notes on tunability
+All core behavior is parameterized for fast iteration during testing:
+- thresholds (`warn_threshold_m`, `stop_threshold_m`)
+- update loop (`eval_rate_hz`)
+- stale timeout (`stale_timeout_sec`)
+- obstacle box dimensions/pose (`obstacle_*`)
