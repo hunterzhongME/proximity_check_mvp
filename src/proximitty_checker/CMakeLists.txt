@@ -10,6 +10,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+
 find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
@@ -22,16 +23,26 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-set(JOINT_STATE_PUB_TARGET ${PROJECT_NAME}_joint_state_pub)
-set(DISTANCE_ESTIMATOR_TARGET ${PROJECT_NAME}_distance_estimator)
+add_executable(joint_state_pub src/joint_state_pub.cpp)
+ament_target_dependencies(joint_state_pub
+  rclcpp
+  sensor_msgs
+)
 
-add_executable(${JOINT_STATE_PUB_TARGET} src/joint_state_pub.cpp)
-set_target_properties(${JOINT_STATE_PUB_TARGET} PROPERTIES OUTPUT_NAME joint_state_pub)
-ament_target_dependencies(${JOINT_STATE_PUB_TARGET} rclcpp sensor_msgs)
+add_executable(distance_estimator src/distance_estimator.cpp)
+ament_target_dependencies(distance_estimator
+  rclcpp
+  sensor_msgs
+  std_msgs
+  geometry_msgs
+  moveit_core
+  moveit_msgs
+  moveit_ros_planning
+  moveit_ros_planning_interface
+)
 
-add_executable(${DISTANCE_ESTIMATOR_TARGET} src/distance_estimator.cpp)
-set_target_properties(${DISTANCE_ESTIMATOR_TARGET} PROPERTIES OUTPUT_NAME distance_estimator)
-ament_target_dependencies(${DISTANCE_ESTIMATOR_TARGET}
+add_executable(distance_estimator src/distance_estimator.cpp)
+ament_target_dependencies(distance_estimator
   rclcpp
   sensor_msgs
   std_msgs
@@ -43,8 +54,8 @@ ament_target_dependencies(${DISTANCE_ESTIMATOR_TARGET}
 )
 
 install(TARGETS
-  ${JOINT_STATE_PUB_TARGET}
-  ${DISTANCE_ESTIMATOR_TARGET}
+  joint_state_pub
+  distance_estimator
   DESTINATION lib/${PROJECT_NAME}
 )
 

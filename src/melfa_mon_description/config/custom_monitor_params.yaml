@@ -94,7 +94,7 @@ control_mode_io:
 data_queue:
   data_1_queue: 101
   data_2_queue: 103
-  data_3_queue: 7, 18, 17 ,19
-  data_4_queue: 8, 15, 1011
+  data_3_queue: 7
+  data_4_queue: 8
 
 

@@ -8,6 +8,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <limits>
+#include <memory>
+#include <string>
 
 #include <builtin_interfaces/msg/time.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -30,6 +33,8 @@ public:
     joint_state_topic_ = this->declare_parameter<std::string>("joint_state_topic", "/joint_states");
     robot_urdf_path_ = this->declare_parameter<std::string>("robot_urdf_path", "");
     robot_description_xml_ = this->declare_parameter<std::string>("robot_description_xml", "");
+    joint_state_topic_ = this->declare_parameter<std::string>("joint_state_topic", "/joint_state_broadcaster/joint_states");
+    robot_description_ = this->declare_parameter<std::string>("robot_description", "robot_description");
 
     warn_threshold_m_ = this->declare_parameter<double>("warn_threshold_m", 0.12);
     stop_threshold_m_ = this->declare_parameter<double>("stop_threshold_m", 0.06);
@@ -111,6 +116,9 @@ private:
     planning_scene_monitor_ = std::make_shared<planning_scene_monitor::PlanningSceneMonitor>(shared_from_this(), "robot_description");
     if (!planning_scene_monitor_->getPlanningScene()) {
       RCLCPP_FATAL(get_logger(), "Failed to initialize PlanningSceneMonitor from local robot description.");
+    planning_scene_monitor_ = std::make_shared<planning_scene_monitor::PlanningSceneMonitor>(shared_from_this(), robot_description_);
+    if (!planning_scene_monitor_->getPlanningScene()) {
+      RCLCPP_FATAL(get_logger(), "Failed to initialize PlanningSceneMonitor. Check robot_description parameter.");
       rclcpp::shutdown();
       return;
     }
@@ -120,6 +128,8 @@ private:
     planning_scene_monitor_->startPublishingPlanningScene(
       planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE,
       "~/monitored_planning_scene");
+    planning_scene_monitor_->startStateMonitor(joint_state_topic_);
+    planning_scene_monitor_->startPublishingPlanningScene(planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE, "~/monitored_planning_scene");
     addStaticObstacle();
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, eval_rate_hz_));
@@ -176,6 +186,7 @@ private:
         "Joint-name mismatch detected. missing=%zu unknown=%zu",
         missing.size(), unknown.size());
     }
+    RCLCPP_INFO(get_logger(), "Distance estimator running. Listening: %s", joint_state_topic_.c_str());
   }
 
   void addStaticObstacle()
@@ -256,6 +267,19 @@ private:
 
   std::set<std::string> expected_joint_names_;
   bool joint_mismatch_checked_{false};
+
+	if (last_joint_state_stamp_.sec == 0 && last_joint_state_stamp_.nanosec == 0) {
+      return false;
+	}
+
+	const rclcpp::Time now = this->now();
+	const rclcpp::Time then(last_joint_state_stamp_);
+	return (now - then).seconds() <= stale_timeout_sec_;
+  }
+  std::string joint_state_topic_;
+  std::string robot_description_;
+  std::string world_frame_;
+  std::string obstacle_id_;
 
   double warn_threshold_m_{};
   double stop_threshold_m_{};
