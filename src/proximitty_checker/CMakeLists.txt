@@ -14,6 +14,7 @@ find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
+find_package(moveit_ros_planning_scene_monitor REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -35,6 +36,7 @@ ament_target_dependencies(distance_estimator
   moveit_msgs
   moveit_ros_planning
   moveit_ros_planning_interface
+  moveit_ros_planning_scene_monitor
 )
 
 install(TARGETS
