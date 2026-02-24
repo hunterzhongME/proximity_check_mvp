@@ -1,0 +1,15 @@
+distance_estimator:
+  ros__parameters:
+    warn_threshold_m: 0.12
+    stop_threshold_m: 0.06
+    stale_timeout_sec: 0.25
+    eval_rate_hz: 20.0
+
+    world_frame: world
+    obstacle_id: mvp_box
+    obstacle_x: 0.35
+    obstacle_y: 0.35
+    obstacle_z: 0.35
+    obstacle_px: 0.55
+    obstacle_py: 0.0
+    obstacle_pz: 0.2
