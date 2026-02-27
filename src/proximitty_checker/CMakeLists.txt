@@ -29,6 +29,13 @@ ament_target_dependencies(joint_state_pub
   sensor_msgs
 )
 
+# NEW: renames joint_1..joint_6 -> rv7frl_joint_1..rv7frl_joint_6
+add_executable(joint_renamer src/joint_renamer.cpp)
+ament_target_dependencies(joint_renamer
+  rclcpp
+  sensor_msgs
+)
+
 add_executable(distance_estimator src/distance_estimator.cpp)
 ament_target_dependencies(distance_estimator
   rclcpp
@@ -43,6 +50,7 @@ ament_target_dependencies(distance_estimator
 
 install(TARGETS
   joint_state_pub
+  joint_renamer
   distance_estimator
   DESTINATION lib/${PROJECT_NAME}
 )
