@@ -56,7 +56,7 @@ install(TARGETS
 )
 
 install(DIRECTORY
-  launch config
+  launch config meshes
   DESTINATION share/${PROJECT_NAME}
 )
 

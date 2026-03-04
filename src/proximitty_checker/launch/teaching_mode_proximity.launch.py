@@ -75,6 +75,9 @@ def generate_launch_description():
                 "robot_description": "robot_description",
                 "robot_description_semantic": "robot_description_semantic",
                 "world_frame": "world",
+                "obstacle_mesh_resource": "package://proximitty_checker/meshes/obstacle.stl",
+				"use_mesh_obstacle": True,
+				"obstacle_mesh_scale": 0.001, #mm -> meter for environment CAD models
             },
         ],
     )

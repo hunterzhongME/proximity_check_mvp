@@ -10,9 +10,13 @@
 #include <vector>
 #include <functional>
 
+#include <Eigen/Core>
+#include <boost/variant/get.hpp>
+
 #include <builtin_interfaces/msg/time.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <moveit_msgs/msg/collision_object.hpp>
+#include <moveit_msgs/msg/planning_scene.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <shape_msgs/msg/solid_primitive.hpp>
@@ -21,7 +25,14 @@
 
 #include <moveit/planning_scene/planning_scene.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
-#include <moveit_msgs/msg/planning_scene.hpp>
+#include <moveit/collision_detection/collision_common.h>
+#include <moveit/collision_detection/collision_env.h>
+#include <moveit/robot_state/conversions.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
+#include <geometric_shapes/shape_operations.h>
+#include <geometric_shapes/shapes.h>
 
 class DistanceEstimator : public rclcpp::Node
 {
@@ -30,15 +41,16 @@ public:
   : Node("distance_estimator")
   {
     joint_state_topic_ = this->declare_parameter<std::string>(
-      "joint_state_topic", "/joint_state_broadcaster/joint_states");
+      "joint_state_topic", "/joint_states_renamed");
 
     // PlanningScene topic for RViz / other consumers
-    rclcpp::QoS qos(1);              // queue depth = 1
-    qos.transient_local();           // keep last msg for late subscribers
-    qos.reliable();                  // reliable delivery
+    rclcpp::QoS qos(1);
+    qos.transient_local();
+    qos.reliable();
     planning_scene_pub_ = this->create_publisher<moveit_msgs::msg::PlanningScene>(
       "/monitored_planning_scene", qos);
 
+    // Robot description inputs
     robot_urdf_path_ = this->declare_parameter<std::string>("robot_urdf_path", "");
     robot_description_xml_ = this->declare_parameter<std::string>("robot_description_xml", "");
     robot_description_ = this->declare_parameter<std::string>("robot_description", "robot_description");
@@ -49,19 +61,28 @@ public:
     robot_description_semantic_ =
       this->declare_parameter<std::string>("robot_description_semantic", "robot_description_semantic");
 
+    // Obstacle config
+    obstacle_id_ = this->declare_parameter<std::string>("obstacle_id", "mvp_obstacle");
+    world_frame_ = this->declare_parameter<std::string>("world_frame", "world");
+
+    // Box obstacle params (fallback)
+    obstacle_x_ = this->declare_parameter<double>("obstacle_x", 0.35);
+    obstacle_y_ = this->declare_parameter<double>("obstacle_y", 0.35);
+    obstacle_z_ = this->declare_parameter<double>("obstacle_z", 0.35);
+    obstacle_px_ = this->declare_parameter<double>("obstacle_px", 100.0);
+    obstacle_py_ = this->declare_parameter<double>("obstacle_py", 0.0);
+    obstacle_pz_ = this->declare_parameter<double>("obstacle_pz", 100.0);
+
+    // Mesh obstacle params
+    obstacle_mesh_resource_ = this->declare_parameter<std::string>("obstacle_mesh_resource", "");
+    obstacle_mesh_scale_ = this->declare_parameter<double>("obstacle_mesh_scale", 0.1); // mm->m default
+    use_mesh_obstacle_ = this->declare_parameter<bool>("use_mesh_obstacle", false);
+
+    // Distance thresholds / timing
     warn_threshold_m_ = this->declare_parameter<double>("warn_threshold_m", 0.12);
     stop_threshold_m_ = this->declare_parameter<double>("stop_threshold_m", 0.06);
     stale_timeout_sec_ = this->declare_parameter<double>("stale_timeout_sec", 0.25);
     eval_rate_hz_ = this->declare_parameter<double>("eval_rate_hz", 20.0);
-
-    obstacle_id_ = this->declare_parameter<std::string>("obstacle_id", "mvp_box");
-    obstacle_x_ = this->declare_parameter<double>("obstacle_x", 0.35);
-    obstacle_y_ = this->declare_parameter<double>("obstacle_y", 0.35);
-    obstacle_z_ = this->declare_parameter<double>("obstacle_z", 0.35);
-    obstacle_px_ = this->declare_parameter<double>("obstacle_px", 0.55);
-    obstacle_py_ = this->declare_parameter<double>("obstacle_py", 0.0);
-    obstacle_pz_ = this->declare_parameter<double>("obstacle_pz", 0.2);
-    world_frame_ = this->declare_parameter<std::string>("world_frame", "world");
 
     min_distance_pub_ = this->create_publisher<std_msgs::msg::Float32>("~/minimum_distance", 10);
     warning_level_pub_ = this->create_publisher<std_msgs::msg::String>("~/warning_level", 10);
@@ -92,9 +113,7 @@ private:
     }
 
     if (robot_urdf_path_.empty()) {
-      RCLCPP_FATAL(
-        get_logger(),
-        "Missing required parameter 'robot_urdf_path'. Set a local URDF file path.");
+      RCLCPP_FATAL(get_logger(), "Missing required parameter 'robot_urdf_path' or 'robot_description_xml'.");
       return false;
     }
 
@@ -111,7 +130,6 @@ private:
       RCLCPP_FATAL(get_logger(), "URDF file is empty: '%s'", robot_urdf_path_.c_str());
       return false;
     }
-
     return true;
   }
 
@@ -123,7 +141,7 @@ private:
     }
 
     if (robot_srdf_path_.empty()) {
-      RCLCPP_FATAL(get_logger(), "Missing required parameter 'robot_srdf_path'.");
+      RCLCPP_FATAL(get_logger(), "Missing required parameter 'robot_srdf_path' or 'robot_description_semantic_xml'.");
       return false;
     }
 
@@ -136,30 +154,33 @@ private:
     std::stringstream buffer;
     buffer << srdf_stream.rdbuf();
     xml_out = buffer.str();
-
     if (xml_out.empty()) {
       RCLCPP_FATAL(get_logger(), "SRDF file is empty: '%s'", robot_srdf_path_.c_str());
       return false;
     }
-
     return true;
+  }
+
+  void ensureParamDeclared(const std::string & name)
+  {
+    if (!this->has_parameter(name)) {
+      this->declare_parameter<std::string>(name, "");
+    }
   }
 
   void initializePlanningScene()
   {
     std::string urdf_xml;
-    if (!loadRobotDescription(urdf_xml)) {
-      rclcpp::shutdown();
-      return;
-    }
+    if (!loadRobotDescription(urdf_xml)) { rclcpp::shutdown(); return; }
 
     std::string srdf_xml;
-    if (!loadSemanticDescription(srdf_xml)) {
-      rclcpp::shutdown();
-      return;
-    }
+    if (!loadSemanticDescription(srdf_xml)) { rclcpp::shutdown(); return; }
 
-    // Publish both descriptions for MoveIt
+    // Make sure the parameters we set exist (ROS2 typically disallows setting undeclared params)
+    ensureParamDeclared(robot_description_);
+    ensureParamDeclared(robot_description_semantic_);
+
+    // Put URDF/SRDF into the param keys that MoveIt expects
     this->set_parameter(rclcpp::Parameter(robot_description_, urdf_xml));
     this->set_parameter(rclcpp::Parameter(robot_description_semantic_, srdf_xml));
 
@@ -167,53 +188,91 @@ private:
       std::make_shared<planning_scene_monitor::PlanningSceneMonitor>(shared_from_this(), robot_description_);
 
     if (!planning_scene_monitor_ || !planning_scene_monitor_->getPlanningScene()) {
-      RCLCPP_FATAL(get_logger(), "Failed to initialize PlanningSceneMonitor from local robot description.");
+      RCLCPP_FATAL(get_logger(), "Failed to initialize PlanningSceneMonitor.");
       rclcpp::shutdown();
       return;
     }
 
     cacheExpectedJointNames();
 
+    // Track joint states into MoveIt's current state
     planning_scene_monitor_->startStateMonitor(joint_state_topic_);
 
-    // Keep disabled for now to avoid duplicate publishers / QoS confusion
-    // planning_scene_monitor_->startPublishingPlanningScene(
-    //   planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE,
-    //   "/monitored_planning_scene");
+    // Add obstacle into internal planning scene
+    if (use_mesh_obstacle_) {
+      addStaticObstacleMesh();
+    } else {
+      addStaticObstacleBox();
+    }
 
-    addStaticObstacle();
+    // Publish ONE full snapshot to RViz immediately + a few bootstrap retries
+    publishPlanningSceneFullOnce();
+    startRvizBootstrapPublish();
 
-	  obstacle_republish_timer_ = this->create_wall_timer(
-		std::chrono::milliseconds(200),
-		std::bind(&DistanceEstimator::republishPlanningSceneFull, this));
+    // Start distance timer
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, eval_rate_hz_));
     timer_ = this->create_wall_timer(
       std::chrono::duration_cast<std::chrono::milliseconds>(period),
       std::bind(&DistanceEstimator::onTimer, this));
 
     init_timer_.reset();
+
     RCLCPP_INFO(get_logger(), "Distance estimator running. Listening: %s", joint_state_topic_.c_str());
-    
-    RCLCPP_INFO(
-  get_logger(),
-  "MoveIt robot model frame: %s",
-  planning_scene_monitor_->getRobotModel()->getModelFrame().c_str());
-  
+    RCLCPP_INFO(get_logger(), "Robot model frame: %s",
+                planning_scene_monitor_->getRobotModel()->getModelFrame().c_str());
+  }
+  void publishRobotStateDiff()
+	{
+	  if (!planning_scene_monitor_) return;
+
+	  moveit_msgs::msg::PlanningScene ps;
+	  ps.is_diff = true;
+
+	  {
+		planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
+		const auto & state = scene->getCurrentState();
+		moveit::core::robotStateToRobotStateMsg(state, ps.robot_state);
+	  }
+
+	  planning_scene_pub_->publish(ps);
+	}
+
+  void publishPlanningSceneFullOnce()
+  {
+    if (!planning_scene_monitor_) return;
+
+    moveit_msgs::msg::PlanningScene ps_msg;
+    {
+      planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
+      scene->getPlanningSceneMsg(ps_msg);
+    }
+    ps_msg.is_diff = false;
+    planning_scene_pub_->publish(ps_msg);
+  }
+
+  void startRvizBootstrapPublish()
+  {
+    rviz_bootstrap_count_ = 0;
+    rviz_bootstrap_timer_ = this->create_wall_timer(
+      std::chrono::seconds(1),
+      [this]() {
+        publishPlanningSceneFullOnce();
+        rviz_bootstrap_count_++;
+        if (rviz_bootstrap_count_ >= 60) { // 5 seconds total
+          rviz_bootstrap_timer_.reset();
+        }
+      });
   }
 
   void cacheExpectedJointNames()
   {
     expected_joint_names_.clear();
     const auto robot_model = planning_scene_monitor_->getRobotModel();
-    if (!robot_model) {
-      return;
-    }
+    if (!robot_model) return;
 
     const auto & active_joints = robot_model->getActiveJointModels();
     for (const auto * joint : active_joints) {
-      if (joint) {
-        expected_joint_names_.insert(joint->getName());
-      }
+      if (joint) expected_joint_names_.insert(joint->getName());
     }
   }
 
@@ -229,28 +288,21 @@ private:
     std::vector<std::string> unknown;
 
     for (const auto & expected : expected_joint_names_) {
-      if (incoming.find(expected) == incoming.end()) {
-        missing.push_back(expected);
-      }
+      if (incoming.find(expected) == incoming.end()) missing.push_back(expected);
     }
-
     for (const auto & name : incoming) {
-      if (expected_joint_names_.find(name) == expected_joint_names_.end()) {
-        unknown.push_back(name);
-      }
+      if (expected_joint_names_.find(name) == expected_joint_names_.end()) unknown.push_back(name);
     }
 
     if (!missing.empty() || !unknown.empty()) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Joint-name mismatch detected. missing=%zu unknown=%zu",
-        missing.size(), unknown.size());
+      RCLCPP_WARN(get_logger(), "Joint-name mismatch detected. missing=%zu unknown=%zu",
+                  missing.size(), unknown.size());
     } else {
       RCLCPP_INFO(get_logger(), "Joint-name check passed.");
     }
   }
 
-  void addStaticObstacle()
+  void addStaticObstacleBox()
   {
     moveit_msgs::msg::CollisionObject object;
     object.header.frame_id = world_frame_;
@@ -270,51 +322,78 @@ private:
     object.primitive_poses.push_back(pose);
     object.operation = moveit_msgs::msg::CollisionObject::ADD;
 
-    // Save for periodic republish
-    obstacle_object_ = object;
-
-    // Apply to local planning scene (used by distance queries)
     {
       planning_scene_monitor::LockedPlanningSceneRW scene(planning_scene_monitor_);
       scene->processCollisionObjectMsg(object);
     }
 
-    // Publish once immediately (full scene bootstrap for RViz)
-    moveit_msgs::msg::PlanningScene ps_msg;
-    ps_msg.is_diff = false;
-    if (planning_scene_monitor_ && planning_scene_monitor_->getRobotModel()) {
-      ps_msg.robot_model_name = planning_scene_monitor_->getRobotModel()->getName();
-    }
-    ps_msg.world.collision_objects.push_back(object);
-    planning_scene_pub_->publish(ps_msg);
-
-    // Optional: notify internal scene update listeners
     planning_scene_monitor_->triggerSceneUpdateEvent(
       planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE);
 
-    RCLCPP_INFO(
-      get_logger(),
-      "Added static obstacle '%s' frame='%s' size=[%.2f %.2f %.2f] pos=[%.2f %.2f %.2f] op=%d",
-      obstacle_id_.c_str(), world_frame_.c_str(),
-      obstacle_x_, obstacle_y_, obstacle_z_,
-      obstacle_px_, obstacle_py_, obstacle_pz_,
-      static_cast<int>(object.operation));
+    RCLCPP_INFO(get_logger(),
+                "Added BOX obstacle '%s' frame='%s' size=[%.3f %.3f %.3f] pos=[%.3f %.3f %.3f]",
+                obstacle_id_.c_str(), world_frame_.c_str(),
+                obstacle_x_, obstacle_y_, obstacle_z_,
+                obstacle_px_, obstacle_py_, obstacle_pz_);
   }
 
-	void republishPlanningSceneFull()
-	{
-		if (!planning_scene_monitor_) return;
+  void addStaticObstacleMesh()
+  {
+    if (obstacle_mesh_resource_.empty()) {
+      RCLCPP_ERROR(get_logger(), "use_mesh_obstacle=true but 'obstacle_mesh_resource' is empty.");
+      return;
+    }
+    
+    moveit_msgs::msg::CollisionObject object;
+    object.header.frame_id = world_frame_;
+    object.id = obstacle_id_;
 
-		moveit_msgs::msg::PlanningScene ps_msg;
+    const std::string mesh_resource = obstacle_mesh_resource_;
 
-		{
-		  planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
-		  scene->getPlanningSceneMsg(ps_msg);   // <-- full scene, includes robot_state + world
-		}
+    Eigen::Vector3d scale(obstacle_mesh_scale_, obstacle_mesh_scale_, obstacle_mesh_scale_);
+    shapes::Mesh* m = shapes::createMeshFromResource(mesh_resource, scale);
+    if (!m) {
+      RCLCPP_ERROR(get_logger(), "Failed to load mesh: %s", mesh_resource.c_str());
+      return;
+    }
 
-		ps_msg.is_diff = false;  // full snapshot
+    shapes::ShapeMsg mesh_shape_msg;
+    shapes::constructMsgFromShape(m, mesh_shape_msg);
+    shape_msgs::msg::Mesh mesh_msg = boost::get<shape_msgs::msg::Mesh>(mesh_shape_msg);
+    delete m;
+
+
+    geometry_msgs::msg::Pose pose;
+	pose.position.x = 0;
+	pose.position.y = 1.0;
+	pose.position.z = obstacle_pz_;
+
+	tf2::Quaternion q;
+	q.setRPY(M_PI/2, 0.0, 0.0);          // try roll +90deg (lies flat)
+	pose.orientation = tf2::toMsg(q);
+    object.meshes.push_back(mesh_msg);
+    object.mesh_poses.push_back(pose);
+    object.operation = moveit_msgs::msg::CollisionObject::ADD;
+
+    {
+      planning_scene_monitor::LockedPlanningSceneRW scene(planning_scene_monitor_);
+      scene->processCollisionObjectMsg(object);
+      moveit_msgs::msg::PlanningScene ps_msg;
+		ps_msg.is_diff = true;
+		ps_msg.world.collision_objects.clear();
+		ps_msg.world.collision_objects.push_back(object);
 		planning_scene_pub_->publish(ps_msg);
-	}
+    }
+
+    planning_scene_monitor_->triggerSceneUpdateEvent(
+      planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE);
+
+    RCLCPP_INFO(get_logger(),
+                "Added MESH obstacle '%s' from '%s' scale=%.6f frame='%s' pos=[%.3f %.3f %.3f]",
+                obstacle_id_.c_str(), mesh_resource.c_str(), obstacle_mesh_scale_,
+                world_frame_.c_str(),
+                pose.position.x, pose.position.y, pose.position.z);
+  }
 
   void onTimer()
   {
@@ -326,63 +405,29 @@ private:
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
         "No fresh joint states on %s", joint_state_topic_.c_str());
-    } 
+    } else {
+      planning_scene_monitor_->updateFrameTransforms();
+      planning_scene_monitor_->updateSceneWithCurrentState();
 
-else {
-  // Sync latest joint states into MoveIt's internal PlanningScene
-  planning_scene_monitor_->updateFrameTransforms();
-  planning_scene_monitor_->updateSceneWithCurrentState();
+      planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
+      collision_detection::DistanceRequest req;
+      collision_detection::DistanceResult res;
 
-  planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
-  collision_detection::DistanceRequest req;
-  collision_detection::DistanceResult res;
+      req.enable_signed_distance = true;
+      req.type = collision_detection::DistanceRequestType::SINGLE;
 
-  req.enable_signed_distance = true;
-  req.type = collision_detection::DistanceRequestType::SINGLE;
+      const auto & state = scene->getCurrentState();
+		
+      scene->getCollisionEnv()->distanceRobot(req, res, state);
+      min_distance = res.minimum_distance.distance;
+      
+      publishRobotStateDiff();
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                           "Distance result: %.4f m", min_distance);
 
-  const auto & state = scene->getCurrentState();
-
-  // --- Debug: print active joint values from MoveIt RobotState ---
-  const auto & active_joints = scene->getRobotModel()->getActiveJointModels();
-  if (!active_joints.empty()) {
-    std::ostringstream oss;
-    oss << "MoveIt RobotState joints: ";
-
-    // print first few joints (usually enough)
-    size_t count = 0;
-    for (const auto * jm : active_joints) {
-      if (!jm) continue;
-
-      const std::string & jn = jm->getName();
-      // Active joints may have 1 variable (revolute/prismatic); use first variable name
-      const auto & var_names = jm->getVariableNames();
-      if (var_names.empty()) continue;
-
-      const std::string & vn = var_names.front();
-      double v = state.getVariablePosition(vn);
-
-      oss << jn << "=" << v << "  ";
-      count++;
-      if (count >= 6) break;  // avoid huge logs
+      if (min_distance <= stop_threshold_m_) warning = "STOP";
+      else if (min_distance <= warn_threshold_m_) warning = "WARN";
     }
-
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000, "%s", oss.str().c_str());
-  }
-
-  // --- Distance query ---
-  scene->getCollisionEnv()->distanceRobot(req, res, state);
-  min_distance = res.minimum_distance.distance;
-
-  RCLCPP_INFO_THROTTLE(
-    get_logger(), *get_clock(), 1000,
-    "Distance result: %.4f m", min_distance);
-
-  if (min_distance <= stop_threshold_m_) {
-    warning = "STOP";
-  } else if (min_distance <= warn_threshold_m_) {
-    warning = "WARN";
-  }
-}
 
     std_msgs::msg::Float32 distance_msg;
     distance_msg.data = std::isfinite(min_distance) ? static_cast<float>(min_distance) : -1.0f;
@@ -395,9 +440,7 @@ else {
 
   bool hasFreshJointState()
   {
-    if (last_joint_state_stamp_.sec == 0 && last_joint_state_stamp_.nanosec == 0) {
-      return false;
-    }
+    if (last_joint_state_stamp_.sec == 0 && last_joint_state_stamp_.nanosec == 0) return false;
 
     const rclcpp::Time now = this->get_clock()->now();
     const rclcpp::Time then(last_joint_state_stamp_);
@@ -406,14 +449,30 @@ else {
 
   // Parameters / config
   std::string joint_state_topic_;
+
   std::string robot_urdf_path_;
   std::string robot_description_xml_;
-  std::string robot_description_;
+  std::string robot_description_; // param key name
+
   std::string robot_srdf_path_;
   std::string robot_description_semantic_xml_;
-  std::string robot_description_semantic_;
+  std::string robot_description_semantic_; // param key name
+
   std::string world_frame_;
   std::string obstacle_id_;
+
+  // Obstacle (box)
+  double obstacle_x_{};
+  double obstacle_y_{};
+  double obstacle_z_{};
+  double obstacle_px_{};
+  double obstacle_py_{};
+  double obstacle_pz_{};
+
+  // Obstacle (mesh)
+  std::string obstacle_mesh_resource_;
+  double obstacle_mesh_scale_{};
+  bool use_mesh_obstacle_{false};
 
   // Joint validation
   std::set<std::string> expected_joint_names_;
@@ -424,14 +483,6 @@ else {
   double stop_threshold_m_{};
   double stale_timeout_sec_{};
   double eval_rate_hz_{};
-
-  // Obstacle box
-  double obstacle_x_{};
-  double obstacle_y_{};
-  double obstacle_z_{};
-  double obstacle_px_{};
-  double obstacle_py_{};
-  double obstacle_pz_{};
 
   // Latest telemetry timestamp
   builtin_interfaces::msg::Time last_joint_state_stamp_{};
@@ -444,9 +495,9 @@ else {
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr init_timer_;
 
-  // Debug obstacle republish
-  moveit_msgs::msg::CollisionObject obstacle_object_;
-  rclcpp::TimerBase::SharedPtr obstacle_republish_timer_;
+  // RViz bootstrap publish
+  rclcpp::TimerBase::SharedPtr rviz_bootstrap_timer_;
+  int rviz_bootstrap_count_{0};
 
   // MoveIt planning scene
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
