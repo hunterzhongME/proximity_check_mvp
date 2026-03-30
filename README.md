@@ -21,6 +21,7 @@ During manual teaching in a tight workspace, operators currently have no automat
 |---|---|
 | **OS** | Ubuntu 22.04 (or compatible) |
 | **ROS 2** | Humble (or compatible ROS 2 distribution) |
+|**Robot Controller**| CR800 series |
 | **Network** | The PC running this stack must be on the same local network as the MELFA robot controller or RT ToolBox3 PC|
 
 ## Steps to Run
