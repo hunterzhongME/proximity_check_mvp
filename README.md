@@ -21,12 +21,7 @@ During manual teaching in a tight workspace, operators currently have no automat
 |---|---|
 | **OS** | Ubuntu 22.04 (or compatible) |
 | **ROS 2** | Humble (or compatible ROS 2 distribution) |
-| **MoveIt 2** | `moveit_core`, `moveit_ros_planning`, `moveit_ros_planning_interface` |
-| **ROS 2 Control** | `ros2_control`, `ros2_controllers`, `controller_manager` |
-| **Build tools** | `colcon`, CMake ≥ 3.8, C++17 compiler |
-| **Other ROS packages** | `xacro`, `robot_state_publisher`, `rviz2`, `sensor_msgs`, `std_msgs`, `geometry_msgs` |
-| **Obstacle model** | A CAD file (STL) or box dimensions for the work-environment obstacles |
-| **Network** | The PC running this stack must be on the same local network as the MELFA robot controller |
+| **Network** | The PC running this stack must be on the same local network as the MELFA robot controller or RT ToolBox3 PC|
 
 ## Steps to Run
 
@@ -38,7 +33,9 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 2. Launch the robot driver (Terminal 1)
+### 2. Launch the robot monitor (Terminal 1)
+
+Before you launch the monitor, turn ON the robot controller/RT ToolBox3 simulator, and ensure the robot controller in in the same local network as the Ubuntu PC.
 
 ```bash
 ros2 launch melfa_mon_bringup monitor_control.launch.py \
